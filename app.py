@@ -4,8 +4,7 @@ import os
 from flask_marshmallow import Marshmallow
 from flask_jwt_extended import JWTManager, jwt_required, create_access_token, get_jwt_identity
 from flask_mail import Mail, Message
-from sqlalchemy import Column, Integer, String, Float, ForeignKey
-from sqlalchemy.orm import relationship
+from sqlalchemy import Column, Integer, String, Float, ForeignKeyConstraint, PrimaryKeyConstraint
 from flask_sqlalchemy import SQLAlchemy
 
 
@@ -31,6 +30,7 @@ def db_create():
 
 @app.cli.command('db_drop')
 def db_drop():
+    db.session.remove()
     db.drop_all()
     print("Database Dropped!")
 
@@ -40,17 +40,15 @@ def db_seed():
 
     mercury = Planets(
         pname='Mercury',
-        ptype='D',
-        home_star='Sol',
+        pclass='D',
         mass=3.258e23,
         radius=1516,
-        distance=35.98e6 
+        distance=35.98e6
     )
 
     venus = Planets(
         pname='Venus',
-        ptype='K',
-        home_star='Sol',
+        pclass='K',
         mass=4.867e24,
         radius=3760,
         distance=67.24e6 
@@ -58,8 +56,7 @@ def db_seed():
 
     earth = Planets(
         pname='Earth',
-        ptype='M',
-        home_star='Sol',
+        pclass='M',
         mass=5.972e24,
         radius=3969,
         distance=92.96e6 
@@ -78,6 +75,19 @@ def db_seed():
     )
 
     db.session.add(tom)
+    
+
+    home_star1 = Homestar(
+        home=3,
+        star=1
+    )
+
+    home_star2 = Homestar(
+        home=3,
+        star=2
+    )
+    db.session.add(home_star1)
+    db.session.add(home_star2)
     db.session.commit()
     print('Database Seeded!')
 
@@ -126,25 +136,30 @@ def planets():
 @app.route('/register', methods=['POST'])
 def register():
     email = request.form['email']
-    test = Users.query.filter_by(email=email).first()
-    if test:
+    first_name = request.form['first_name']
+    test_email = Users.query.filter_by(email=test_email).first()
+    if test_email:
         return jsonify(message='Email address already registered!'), 409
-    else:
-        # get the registration info and make a new user obj
-        new_user = Users(
-            first_name=request.form['first_name'],
-            last_name=request.form['last_name'],
-            password=request.form['password'],
-            email=email,
-            planet_id=None
-        )
-        planet_id = request.form['planet_id']
-        if planet_id:
-            new_user['planet_id'] = planet_id
-        # add the new user to database 
-        db.session.add(new_user)
-        db.session.commit()
-        return jsonify(message='User Created Successfully!'), 201
+    
+    test_first_name = Users.query.filter_by(first_name=test_first_name).first()
+    if test_first_name:
+        return jsonify(message="First name already registered!"), 409
+
+    # get the registration info and make a new user obj
+    new_user = Users(
+        first_name=first_name,
+        last_name=request.form['last_name'],
+        password=request.form['password'],
+        email=email,
+        planet_id=None
+    )
+    planet_id = request.form['planet_id']
+    if planet_id:
+        new_user['planet_id'] = planet_id
+    # add the new user to database 
+    db.session.add(new_user)
+    db.session.commit()
+    return jsonify(message='User Created Successfully!'), 201
 
 
 @app.route('/login', methods=['POST'])
@@ -319,29 +334,58 @@ def user_migrate(pid:int):
     return jsonify(message=f"You migrated to planet {test_planet_exists.pname}! (planet id: {pid})")
 
 
+@app.route('/new_planet', methods=['POST'])
+@jwt_required
+def new_planet():
+    current_user = get_jwt_identity()
+
+    # this func serves for a user discovering a new planet
+    # and add a new planet to the datebase with the given planet info
+    new = Planets(
+        pname=request.form['planet_name'],
+        pclass=request.form['planet_class'],
+        radius=float(request.form['radius']),
+        mass=float(request.form['mass']),
+        distance=float(request.form['distance']),
+        owner=current_user
+    )
+    db.session.add(new)
+    db.session.commit()
+
+    return jsonify(message="You discovery has been recorded!")
+
+
 
 ### database models
 class Users(db.Model):
     __tablename__ = 'users'
     id = Column(Integer, primary_key=True)
-    first_name = Column(String)
+    first_name = Column(String, unique=True)
     last_name = Column(String)
     email = Column(String, unique=True)
     password = Column(String)
-    planet_id = Column(Integer, ForeignKey('planets.pid'), nullable=True)
-
+    planet_id = Column(Integer, nullable=True)
+    ForeignKeyConstraint(['planet_id'], ['Planets.pid'], name="planet_people", onupdate="CASCADE", ondelete="SET NULL")
+    
 
 class Planets(db.Model):
     __tablename__ = 'planets'
     pid = Column(Integer, primary_key=True)
-    pname = Column(String)
-    ptype = Column(String)
-    home_star = Column(String)
+    pname = Column(String, unique=True)
+    pclass = Column(String(1))
     mass =  Column(Float)
     radius = Column(Float)
     distance = Column(Float)
-    people = relationship("Users")
+    owner = Column(Integer)
+    ForeignKeyConstraint(['owner'], ['Users.id'], name="planet_ownership", onupdate="CASCADE", ondelete="SET NULL")
 
+
+class Homestar(db.Model):
+    __tablename__ = "homestar"
+    home = Column(Integer, primary_key=True)
+    star = Column(Integer, primary_key=True)
+    ForeignKeyConstraint(['home'], ['Planets.pid'], name="home_planet", onupdate="CASCADE", ondelete="SET NULL")
+    ForeignKeyConstraint(['star'], ['Planets.pid'], name="homestar_planet", onupdate="CASCADE", ondelete="SET NULL")
 ###
 
 
@@ -353,14 +397,16 @@ class Planet_schema(ma.Schema):
     class Meta:
         fields = ('pid', 'pname', 'ptype', 'home_star', 'mass', 'radius', 'distance')
 
+class Homestar_schema(ma.Schema):
+    class Meta:
+        fields = ('home', 'star')
 
 user_schema = User_schema()
-users_schema = User_schema(many=True)
 planet_schema = Planet_schema()
 planets_schema = Planet_schema(many=True)
-
+homestar_schema = Homestar_schema()
 
 
 if __name__ == '__main__':
-    app.run(port=5000)
+    app.run(port=5000, debug=True)
     
